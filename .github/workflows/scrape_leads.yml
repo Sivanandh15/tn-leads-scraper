@@ -1,0 +1,47 @@
+name: Daily TN Lead Scraper
+
+on:
+  # Runs every day at 9:30 AM IST (4:00 AM UTC) — no end date, runs forever
+  schedule:
+    - cron: '0 4 * * *'
+
+  # Manual trigger from Actions tab
+  workflow_dispatch:
+
+jobs:
+  scrape-and-email:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45   # Increased — more scraping now
+
+    permissions:
+      contents: write   # Needed to commit CSVs back to repo
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run lead scraper
+        env:
+          GMAIL_USER:         ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          TO_EMAIL:           ${{ secrets.TO_EMAIL }}
+        run: python main.py
+
+      - name: Commit leads CSVs to repo
+        run: |
+          git config --local user.email "actions@github.com"
+          git config --local user.name  "Lead Scraper Bot"
+          git add leads/
+          git diff --quiet && git diff --staged --quiet \
+            && echo "No new leads to commit." \
+            || git commit -m "leads: $(date +%Y-%m-%d)"
+          git push
