@@ -1,12 +1,12 @@
 """
 Corporate Gifting Lead Scraper — Main Orchestrator
-Runs every day at 9:30 AM IST via GitHub Actions.
-- Scrapes ALL companies from Tamil Nadu cities (no lead cap)
-- Covers all industries relevant to corporate gifting
-- Master CSV deduplication: never emails the same company twice
-- Runs indefinitely (no end date)
+- 50 leads from Chennai, 30 from Coimbatore, 10 from one rotating city = ~100/day
+- ONLY leads with a phone number are kept
+- Priority order: IT/Tech → Corporate/Manufacturing → Pharma → others
+- Sulekha runs first (best source for phone numbers)
+- Master CSV dedup: same company never emailed twice
 """
-import os, asyncio, time, logging, sys
+import os, time, logging
 from datetime import datetime, date
 import pandas as pd
 
@@ -20,172 +20,129 @@ from emailer         import send_email_report
 logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(levelname)s  %(message)s")
 log = logging.getLogger(__name__)
 
-MASTER_CSV  = "leads/master_leads.csv"   # All-time history for cross-run dedup
-LEADS_DIR   = "leads"
+MASTER_CSV = "leads/master_leads.csv"
+LEADS_DIR  = "leads"
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Industries relevant to corporate gifting (covers every type of B2B company)
-# ─────────────────────────────────────────────────────────────────────────────
-ALL_INDUSTRIES = [
-    # OSM query string            Sulekha category slug           Naukri role
-    ("IT company",                "it-companies",                 "hr manager"),
-    ("software company",          "it-companies",                 "admin manager"),
-    ("pharma company",            "pharmaceutical-companies",     "procurement manager"),
-    ("hospital",                  "hospitals",                    "hr manager"),
-    ("manufacturing company",     "manufacturing-companies",      "hr manager"),
-    ("textile company",           "textile-companies",            "admin manager"),
-    ("real estate company",       "real-estate-agents",           "hr manager"),
-    ("construction company",      "construction-companies",       "procurement manager"),
-    ("bank",                      "banks",                        "hr manager"),
-    ("insurance company",         "insurance-companies",          "hr manager"),
-    ("logistics company",         "logistics-companies",          "procurement manager"),
-    ("hotel",                     "hotels",                       "hr manager"),
-    ("automobile dealer",         "automobile-dealers",           "admin manager"),
-    ("advertising agency",        "advertising-agencies",         "hr manager"),
-    ("event management company",  "event-management-companies",   "admin manager"),
-    ("educational institute",     "educational-institutes",       "admin manager"),
-    ("fmcg company",              "fmcg-companies",               "procurement manager"),
-    ("ca firm",                   "chartered-accountants",        "admin manager"),
-    ("food company",              "food-companies",               "hr manager"),
-    ("retail company",            "retail-companies",             "hr manager"),
+CITY_CAPS = {
+    "Chennai":    50,
+    "Coimbatore": 30,
+    "OTHER":      10,
+}
+
+ROTATING_CITIES = [
+    "Madurai", "Trichy", "Salem", "Tiruppur",
+    "Vellore", "Erode", "Tirunelveli", "Thoothukudi",
+    "Dindigul", "Thanjavur",
 ]
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Cities — weekly rotation (Chennai gets 2 days since it's biggest)
-# weekday: 0=Mon,1=Tue,2=Wed,3=Thu,4=Fri,5=Sat,6=Sun
-# ─────────────────────────────────────────────────────────────────────────────
-CITY_ROTATION = {
-    0: ["Chennai"],                         # Monday   — Chennai pass 1 (industries 0–9)
-    1: ["Chennai"],                         # Tuesday  — Chennai pass 2 (industries 10–19)
-    2: ["Coimbatore", "Tiruppur"],          # Wednesday
-    3: ["Madurai", "Trichy"],               # Thursday
-    4: ["Salem", "Erode", "Dindigul"],      # Friday
-    5: ["Vellore", "Thanjavur"],            # Saturday
-    6: ["Tirunelveli", "Thoothukudi"],      # Sunday
-}
-
-# On Mon, use industries 0-9; on Tue use 10-19 (to cover ALL for Chennai)
-CHENNAI_INDUSTRY_SLICE = {
-    0: ALL_INDUSTRIES[:10],
-    1: ALL_INDUSTRIES[10:],
-}
-
-LINKEDIN_QUERIES = {
-    0: ["HR Manager IT company Chennai",       "Admin Head pharma Chennai",
-        "Procurement Manager manufacturing Chennai"],
-    1: ["HR Director real estate Chennai",     "Admin Head hotel Chennai",
-        "Procurement Manager logistics Chennai"],
-    2: ["HR Manager IT company Coimbatore",    "Admin Head textile Tiruppur",
-        "HR Director manufacturing Coimbatore"],
-    3: ["HR Manager IT Madurai Tamil Nadu",    "Procurement Head manufacturing Trichy",
-        "Admin Manager real estate Madurai"],
-    4: ["HR Manager manufacturing Salem",      "Admin Head IT Salem",
-        "Procurement Manager Erode Tamil Nadu"],
-    5: ["HR Manager IT Vellore Tamil Nadu",    "Admin Head manufacturing Thanjavur",
-        "HR Director educational institute Vellore"],
-    6: ["HR Manager manufacturing Tirunelveli","Admin Head pharma Tirunelveli",
-        "Procurement Head Thoothukudi Tamil Nadu"],
-}
+# (sulekha_category, osm_query, priority)  1=highest
+INDUSTRIES = [
+    ("it-companies",              "IT company",             1),
+    ("software-companies",        "software company",       1),
+    ("advertising-agencies",      "advertising agency",     1),
+    ("manufacturing-companies",   "manufacturing company",  2),
+    ("construction-companies",    "construction company",   2),
+    ("logistics-companies",       "logistics company",      2),
+    ("automobile-dealers",        "automobile dealer",      2),
+    ("real-estate-agents",        "real estate company",    2),
+    ("event-management-companies","event management",       2),
+    ("pharmaceutical-companies",  "pharma company",         3),
+    ("hospitals",                 "hospital",               3),
+    ("banks",                     "bank",                   4),
+    ("insurance-companies",       "insurance company",      4),
+    ("fmcg-companies",            "fmcg company",           4),
+]
 
 
-async def main():
-    run_date    = datetime.now().strftime("%Y-%m-%d")
-    day_of_week = date.today().weekday()
+def has_phone(lead):
+    phone = str(lead.get("phone", "")).strip()
+    digits = "".join(c for c in phone if c.isdigit())
+    return len(digits) >= 7
+
+
+def scrape_city(city, cap):
+    city_leads = []
+    for sulekha_cat, osm_query, priority in sorted(INDUSTRIES, key=lambda x: x[2]):
+        if len(city_leads) >= cap * 3:   # gather 3x then dedup+cap
+            break
+        leads = scrape_sulekha(sulekha_cat, city, max_pages=5)
+        phone_leads = [l for l in leads if has_phone(l)]
+        city_leads.extend(phone_leads)
+        log.info(f"  Sulekha [{sulekha_cat}/{city}] {len(leads)} total → {len(phone_leads)} with phone")
+        time.sleep(2)
+        leads = scrape_google_maps(osm_query, city, max_results=200)
+        phone_leads = [l for l in leads if has_phone(l)]
+        city_leads.extend(phone_leads)
+        log.info(f"  OSM [{osm_query}/{city}] {len(leads)} total → {len(phone_leads)} with phone")
+        time.sleep(2)
+    unique = deduplicate(city_leads)[:cap]
+    log.info(f"  {city} final: {len(unique)} leads")
+    return unique
+
+
+def main():
+    run_date = datetime.now().strftime("%Y-%m-%d")
     os.makedirs(LEADS_DIR, exist_ok=True)
+    log.info(f"=== TN Lead Scrape: {run_date} ===")
 
-    log.info(f"=== TN Lead Scrape started: {run_date} (weekday={day_of_week}) ===")
+    day_index     = date.today().toordinal() % len(ROTATING_CITIES)
+    rotating_city = ROTATING_CITIES[day_index]
+    log.info(f"Rotating city today: {rotating_city}")
 
-    # Load all previously seen company names for cross-run dedup
     master_seen = load_master_seen(MASTER_CSV)
-    log.info(f"Master history: {len(master_seen)} companies already scraped before today")
+    log.info(f"Master history: {len(master_seen)} already scraped")
 
     all_leads = []
-    cities    = CITY_ROTATION.get(day_of_week, ["Chennai"])
+    all_leads.extend(scrape_city("Chennai",    CITY_CAPS["Chennai"]))
+    all_leads.extend(scrape_city("Coimbatore", CITY_CAPS["Coimbatore"]))
+    all_leads.extend(scrape_city(rotating_city, CITY_CAPS["OTHER"]))
 
-    # Pick industry list — Chennai has two passes (Mon/Tue) to cover all 20 industries
-    if day_of_week in (0, 1) and cities == ["Chennai"]:
-        industries = CHENNAI_INDUSTRY_SLICE[day_of_week]
-    else:
-        industries = ALL_INDUSTRIES  # All industries for every other city
+    for q in ["HR Manager IT company Chennai",
+              "Admin Manager manufacturing Coimbatore",
+              "Procurement Manager pharma Chennai"]:
+        all_leads.extend(scrape_linkedin_via_google(q, max_results=5))
+        time.sleep(5)
 
-    # ── 1. OpenStreetMap / Overpass (gets the most leads — no key needed) ──
-    log.info("Scraping OpenStreetMap via Overpass API…")
-    for city in cities:
-        for osm_query, _, _ in industries:
-            leads = scrape_google_maps(osm_query, city, max_results=500)
-            all_leads.extend(leads)
-            log.info(f"  Overpass [{osm_query} in {city}] → {len(leads)}")
-            time.sleep(2)
-
-    # ── 2. Sulekha (business directory with phone numbers) ──────────────────
-    log.info("Scraping Sulekha…")
-    for city in cities:
-        for _, sulekha_cat, _ in industries:
-            leads = scrape_sulekha(sulekha_cat, city, max_pages=10)
-            all_leads.extend(leads)
-            log.info(f"  Sulekha [{sulekha_cat} in {city}] → {len(leads)}")
-            time.sleep(2)
-
-    # ── 3. Naukri (hiring signal — companies with budget) ───────────────────
-    log.info("Scraping Naukri…")
-    for city in cities:
-        for _, _, naukri_role in industries:
-            leads = scrape_naukri(naukri_role, city, max_pages=3)
-            all_leads.extend(leads)
-            time.sleep(2)
-    log.info(f"  Naukri total → {len([l for l in all_leads if l.get('source','').startswith('Naukri')])}")
-
-    # ── 4. LinkedIn via Google ───────────────────────────────────────────────
-    log.info("Finding LinkedIn profiles via Google…")
-    for search in LINKEDIN_QUERIES.get(day_of_week, LINKEDIN_QUERIES[0]):
-        leads = scrape_linkedin_via_google(search, max_results=10)
-        all_leads.extend(leads)
-        log.info(f"  LinkedIn [{search}] → {len(leads)}")
-        time.sleep(5)  # be extra polite to Google
-
-    # ── 5. Dedup within today's run ─────────────────────────────────────────
-    today_unique = deduplicate(all_leads)
-    log.info(f"After today's internal dedup: {len(today_unique)} leads")
-
-    # ── 6. Remove leads already seen in previous runs ───────────────────────
     new_leads = [
-        lead for lead in today_unique
-        if _normalise_name(lead.get("company_name", "")) not in master_seen
+        l for l in deduplicate(all_leads)
+        if _norm(l.get("company_name","")) not in master_seen
     ]
-    log.info(f"After cross-run dedup: {len(new_leads)} genuinely NEW leads today")
+    log.info(f"New leads after cross-run dedup: {len(new_leads)}")
+
+    priority_map = {"IT / Tech":1,"Manufacturing / Textile":2,
+                    "Real Estate / Construction":2,"Logistics / Transport":2,
+                    "Pharma / Healthcare":3,"BFSI":4,"Other":5}
+    new_leads.sort(key=lambda l:(
+        0 if has_phone(l) else 1,
+        priority_map.get(l.get("industry","Other"),5),
+    ))
 
     if not new_leads:
-        log.warning("No new leads found today. All companies already scraped before.")
+        log.warning("No new leads today.")
         return
 
-    # ── 7. Save today's CSV ─────────────────────────────────────────────────
     csv_path = f"{LEADS_DIR}/leads_{run_date}.csv"
     df = pd.DataFrame(new_leads)
     for col in ["company_name","contact_name","designation","phone",
                 "email","website","address","industry","source","notes"]:
         if col not in df.columns:
             df[col] = ""
-    df = df[["company_name","contact_name","designation","phone",
-             "email","website","address","industry","source","notes"]]
-    df.to_csv(csv_path, index=False)
-    log.info(f"Saved → {csv_path}")
+    df[["company_name","contact_name","designation","phone",
+        "email","website","address","industry","source","notes"]].to_csv(csv_path, index=False)
+    log.info(f"Saved → {csv_path}  (with phone: {df[df.phone.notna() & (df.phone!='')].shape[0]})")
 
-    # ── 8. Update master CSV (append new companies) ─────────────────────────
     save_master_seen(MASTER_CSV, new_leads, master_seen)
-    log.info(f"Master CSV updated with {len(new_leads)} new entries")
-
-    # ── 9. Send email ────────────────────────────────────────────────────────
     send_email_report(new_leads, csv_path, run_date)
     log.info("=== Done ===")
 
 
-def _normalise_name(name: str) -> str:
+def _norm(name):
     import re
     name = name.lower().strip()
-    name = re.sub(r"\b(pvt|ltd|private|limited|llp|inc|corp|co|&)\b", "", name)
-    name = re.sub(r"[^a-z0-9 ]", "", name)
-    return re.sub(r"\s+", " ", name).strip()
+    name = re.sub(r"\b(pvt|ltd|private|limited|llp|inc|corp|co|&)\b","",name)
+    name = re.sub(r"[^a-z0-9 ]","",name)
+    return re.sub(r"\s+"," ",name).strip()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
