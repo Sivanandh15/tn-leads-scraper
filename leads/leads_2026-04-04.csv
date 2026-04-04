@@ -1,0 +1,4 @@
+company_name,contact_name,designation,phone,email,website,address,industry,source,notes
+Stone Bench Pvt Ltd,,,044 4285 3134,,https://www.stonebench.co.in/,"22/2, 12th Avenue, Ashok Nagar, Chennai, 600083",BFSI,OpenStreetMap,"osm/node/8111858205 | Chennai, TN"
+HDFC Home Loans Velachery Branch,,,+91 44 2246 3711;+91 44 2246 3712,,https://www.hdfc.com,"12, Balaji Nagar, Velachery Main Road, Chennai, 600100",BFSI,OpenStreetMap,"osm/node/8577515098 | Chennai, TN"
+Vairaprakash Store,,,090477 77934,,,"108B, Munichalai Road, Krishna Puram, Madurai, Tamil Nadu., Madurai, 625009",FMCG / Retail / Food,OpenStreetMap,"osm/node/13006226401 | Madurai, TN"
