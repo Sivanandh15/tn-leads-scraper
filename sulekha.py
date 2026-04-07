@@ -1,135 +1,179 @@
 """
-Sulekha.com business listing scraper.
-Updated: Pharma / Healthcare categories removed entirely.
-Full pagination (fetches ALL pages until empty).
+Business scraper using Overpass API (OpenStreetMap) — free, no API key.
+Updated: Pharma / Healthcare (pharma company, hospital) removed entirely.
+No result cap — fetches ALL matching businesses per city.
 """
 import requests, time, logging
-from bs4 import BeautifulSoup
-from fake_useragent import UserAgent
 
 log = logging.getLogger(__name__)
-ua  = UserAgent()
+OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 
-HEADERS = {
-    "Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.5",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Connection":      "keep-alive",
-    "DNT":             "1",
+# Pharma / hospital entries removed
+QUERY_TO_OSM_TAGS = {
+    "it company":              [("office","it"), ("office","software"), ("office","technology")],
+    "software company":        [("office","software"), ("office","it")],
+    "manufacturing company":   [("office","company"), ("landuse","industrial"), ("building","industrial")],
+    "textile company":         [("office","company"), ("industrial","textile")],
+    "real estate company":     [("office","real_estate"), ("office","estate_agent")],
+    "construction company":    [("office","construction"), ("office","company")],
+    "bank":                    [("amenity","bank")],
+    "insurance company":       [("office","insurance"), ("office","financial")],
+    "ca firm":                 [("office","accountant"), ("office","financial")],
+    "logistics company":       [("office","logistics"), ("office","company")],
+    "hotel":                   [("tourism","hotel"), ("tourism","guest_house")],
+    "automobile dealer":       [("shop","car"), ("shop","vehicle")],
+    "advertising agency":      [("office","advertising"), ("office","marketing")],
+    "event management company":[("office","company"), ("office","event_management")],
+    "educational institute":   [("amenity","college"), ("amenity","university"), ("amenity","school")],
+    "fmcg company":            [("shop","supermarket"), ("shop","convenience"), ("office","company")],
+    "retail company":          [("shop","mall"), ("shop","department_store"), ("office","company")],
+    "food company":            [("office","company"), ("industrial","food")],
+    # catch-all fallback
+    "company":                 [("office","company"), ("office","yes")],
 }
 
-# Pharma / Healthcare removed — pharmaceutical-companies, hospitals removed
-INDUSTRY_MAP = {
-    "it-companies":              "IT / Tech",
-    "software-companies":        "IT / Tech",
-    "manufacturing-companies":   "Manufacturing / Textile",
-    "textile-companies":         "Manufacturing / Textile",
-    "real-estate-agents":        "Real Estate / Construction",
-    "construction-companies":    "Real Estate / Construction",
-    "banks":                     "BFSI",
-    "insurance-companies":       "BFSI",
-    "chartered-accountants":     "BFSI",
-    "ca-firms":                  "BFSI",
-    "logistics-companies":       "Logistics / Transport",
-    "hotels":                    "Hospitality",
-    "automobile-dealers":        "Automobile",
-    "advertising-agencies":      "Media / Events",
-    "event-management-companies":"Media / Events",
-    "educational-institutes":    "Education",
-    "fmcg-companies":            "FMCG / Retail / Food",
-    "retail-companies":          "FMCG / Retail / Food",
-    "food-companies":            "FMCG / Retail / Food",
+# Blocked OSM tag values — skip any result that maps to these industries
+BLOCKED_OSM_TAGS = {
+    ("office", "pharmaceutical"),
+    ("amenity", "hospital"),
+    ("amenity", "clinic"),
+    ("healthcare", "hospital"),
 }
 
-CITY_SLUG_MAP = {
-    "Chennai":     "chennai",
-    "Coimbatore":  "coimbatore",
-    "Madurai":     "madurai",
-    "Trichy":      "trichy",
-    "Salem":       "salem",
-    "Tiruppur":    "tiruppur",
-    "Vellore":     "vellore",
-    "Erode":       "erode",
-    "Tirunelveli": "tirunelveli",
-    "Thoothukudi": "tuticorin",
-    "Dindigul":    "dindigul",
-    "Thanjavur":   "thanjavur",
+CITY_BBOX = {
+    "Chennai":      (12.82, 80.08, 13.23, 80.33),
+    "Coimbatore":   (10.85, 76.87, 11.10, 77.12),
+    "Madurai":      ( 9.84, 78.01,  9.99, 78.24),
+    "Trichy":       (10.70, 78.58, 10.90, 78.82),
+    "Salem":        (11.56, 78.04, 11.74, 78.28),
+    "Tiruppur":     (11.06, 77.28, 11.20, 77.49),
+    "Vellore":      (12.87, 79.06, 13.01, 79.22),
+    "Erode":        (11.28, 77.63, 11.44, 77.78),
+    "Tirunelveli":  ( 8.64, 77.63,  8.80, 77.84),
+    "Thoothukudi":  ( 8.70, 78.08,  8.86, 78.23),
+    "Dindigul":     (10.33, 77.88, 10.44, 78.02),
+    "Thanjavur":    (10.72, 79.08, 10.82, 79.20),
+    "Bangalore":    (12.83, 77.46, 13.14, 77.78),
+    "Mumbai":       (18.89, 72.77, 19.27, 72.99),
+    "Delhi":        (28.40, 76.84, 28.88, 77.35),
+    "Hyderabad":    (17.27, 78.27, 17.57, 78.62),
+    "Pune":         (18.42, 73.74, 18.63, 73.98),
 }
 
+DEFAULT_BBOX = (12.82, 80.08, 13.23, 80.33)  # Chennai
 
-def scrape_sulekha(category: str, city: str, max_pages: int = 10) -> list[dict]:
-    """Scrape ALL Sulekha pages for category in city."""
-    # Skip if category was accidentally passed for a removed industry
-    if category in ("pharmaceutical-companies", "hospitals"):
-        log.info(f"  Sulekha: skipping blocked category [{category}]")
+
+def scrape_google_maps(query: str, city: str, api_key: str = "", max_results: int = 500) -> list[dict]:
+    # Hard-block pharma/hospital queries before even hitting the API
+    q_lower = query.lower()
+    if "pharma" in q_lower or "hospital" in q_lower or "clinic" in q_lower:
+        log.info(f"  OSM: skipping blocked query [{query}]")
         return []
 
-    leads     = []
-    industry  = INDUSTRY_MAP.get(category, "Other")
-    city_slug = CITY_SLUG_MAP.get(city, city.lower())
+    bbox     = CITY_BBOX.get(city, DEFAULT_BBOX)
+    tags     = _resolve_tags(query)
+    leads    = []
+    seen_ids = set()
 
-    for page in range(1, max_pages + 1):
-        if page == 1:
-            url = f"https://www.sulekha.com/{category}/{city_slug}/companies"
-        else:
-            url = f"https://www.sulekha.com/{category}/{city_slug}/companies-{page}"
-
+    for tag_key, tag_val in tags:
+        if (tag_key, tag_val) in BLOCKED_OSM_TAGS:
+            continue
         try:
-            headers = {**HEADERS, "User-Agent": ua.random}
-            resp    = requests.get(url, headers=headers, timeout=15)
-            resp.raise_for_status()
+            results = _query_overpass(tag_key, tag_val, bbox, limit=max_results)
+            for element in results:
+                eid = element.get("id")
+                if eid in seen_ids:
+                    continue
+                seen_ids.add(eid)
+                lead = _element_to_lead(element, query, city)
+                if lead:
+                    leads.append(lead)
+            time.sleep(1.5)
         except Exception as e:
-            log.error(f"Sulekha error [{url}]: {e}")
-            break
-
-        soup  = BeautifulSoup(resp.text, "lxml")
-        cards = (soup.select("div.companylist-cont") or
-                 soup.select("li.listing-item")      or
-                 soup.select("div.biz-listing")      or
-                 soup.select("div.company-info"))
-
-        if not cards:
-            log.info(f"  Sulekha {category}/{city}: no cards on page {page}, stopping")
-            break
-
-        for card in cards:
-            name    = _text(card, ["h2.company-name","h3.companyname","h2","h3"])
-            phone   = _text(card, ["span.phone-no","span.contact-no","a.phone","span.mobileno"])
-            address = _text(card, ["span.address","p.address","div.address","span.locality"])
-            website = _attr(card, ["a.website-link","a[href*='http']"], "href")
-
-            if not name:
-                continue
-            leads.append({
-                "company_name": name.strip(),
-                "contact_name": "",
-                "designation":  "",
-                "phone":        phone.replace("\n","").strip(),
-                "email":        "",
-                "website":      website if website and website.startswith("http") else "",
-                "address":      f"{address.strip()}, {city}".strip(", "),
-                "industry":     industry,
-                "source":       "Sulekha",
-                "notes":        f"{city}, Tamil Nadu",
-            })
-
-        log.info(f"  Sulekha {category}/{city} page {page}: +{len(cards)} entries")
-        time.sleep(2.5)
+            log.error(f"Overpass error [{tag_key}={tag_val} in {city}]: {e}")
 
     return leads
 
 
-def _text(card, selectors):
-    for sel in selectors:
-        el = card.select_one(sel)
-        if el:
-            return el.get_text(strip=True)
-    return ""
+def _resolve_tags(query: str) -> list[tuple]:
+    q = query.lower().strip()
+    for keyword, tags in QUERY_TO_OSM_TAGS.items():
+        if keyword in q:
+            return tags
+    return [("office","company"), ("office","yes")]
 
 
-def _attr(card, selectors, attr):
-    for sel in selectors:
-        el = card.select_one(sel)
-        if el and el.get(attr):
-            return el[attr]
-    return ""
+def _query_overpass(tag_key: str, tag_val: str, bbox: tuple, limit: int = 500) -> list[dict]:
+    south, west, north, east = bbox
+    bbox_str = f"{south},{west},{north},{east}"
+    overpass_ql = f"""
+    [out:json][timeout:60];
+    (
+      node["{tag_key}"="{tag_val}"]({bbox_str});
+      way["{tag_key}"="{tag_val}"]({bbox_str});
+      relation["{tag_key}"="{tag_val}"]({bbox_str});
+    );
+    out body center {limit};
+    """
+    resp = requests.post(
+        OVERPASS_URL,
+        data={"data": overpass_ql},
+        timeout=65,
+        headers={"User-Agent": "LeadScraper/2.0 (corporate gifting research)"},
+    )
+    resp.raise_for_status()
+    return resp.json().get("elements", [])
+
+
+def _element_to_lead(element: dict, query: str, city: str) -> dict | None:
+    tags = element.get("tags", {})
+    name = tags.get("name") or tags.get("name:en", "")
+    if not name:
+        return None
+
+    addr_parts = [
+        tags.get("addr:housenumber", ""),
+        tags.get("addr:street", ""),
+        tags.get("addr:suburb", ""),
+        tags.get("addr:city", city),
+        tags.get("addr:postcode", ""),
+    ]
+    address  = ", ".join(p for p in addr_parts if p) or city
+    phone    = tags.get("phone") or tags.get("contact:phone") or tags.get("contact:mobile", "")
+    website  = tags.get("website") or tags.get("contact:website") or tags.get("url", "")
+    email    = tags.get("email") or tags.get("contact:email", "")
+    osm_id   = element.get("id", "")
+    osm_type = element.get("type", "node")
+
+    industry = _guess_industry(query)
+    # Safety net — drop anything that slipped through as pharma
+    if "pharma" in industry.lower() or "healthcare" in industry.lower():
+        return None
+
+    return {
+        "company_name": name,
+        "contact_name": "",
+        "designation":  "",
+        "phone":        phone,
+        "email":        email,
+        "website":      website,
+        "address":      address,
+        "industry":     industry,
+        "source":       "OpenStreetMap",
+        "notes":        f"osm/{osm_type}/{osm_id} | {city}, TN",
+    }
+
+
+def _guess_industry(query: str) -> str:
+    q = query.lower()
+    if any(k in q for k in ("it ","software","tech")): return "IT / Tech"
+    if "real estate" in q or "construction" in q:      return "Real Estate / Construction"
+    if any(k in q for k in ("bank","insurance","ca ","financial")): return "BFSI"
+    if "fmcg" in q or "retail" in q or "food" in q:   return "FMCG / Retail / Food"
+    if "manufactur" in q or "textile" in q:            return "Manufacturing / Textile"
+    if "logistics" in q:                               return "Logistics / Transport"
+    if "hotel" in q:                                   return "Hospitality"
+    if "automobile" in q:                              return "Automobile"
+    if "advertis" in q or "event" in q:               return "Media / Events"
+    if "educat" in q:                                  return "Education"
+    return "Other"
