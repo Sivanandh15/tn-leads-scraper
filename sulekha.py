@@ -1,6 +1,7 @@
 """
 Sulekha.com business listing scraper.
-Updated: full pagination (fetches ALL pages until empty), 20 industry categories.
+Updated: Pharma / Healthcare categories removed entirely.
+Full pagination (fetches ALL pages until empty).
 """
 import requests, time, logging
 from bs4 import BeautifulSoup
@@ -17,10 +18,10 @@ HEADERS = {
     "DNT":             "1",
 }
 
+# Pharma / Healthcare removed — pharmaceutical-companies, hospitals removed
 INDUSTRY_MAP = {
     "it-companies":              "IT / Tech",
-    "pharmaceutical-companies":  "Pharma / Healthcare",
-    "hospitals":                 "Pharma / Healthcare",
+    "software-companies":        "IT / Tech",
     "manufacturing-companies":   "Manufacturing / Textile",
     "textile-companies":         "Manufacturing / Textile",
     "real-estate-agents":        "Real Estate / Construction",
@@ -28,6 +29,7 @@ INDUSTRY_MAP = {
     "banks":                     "BFSI",
     "insurance-companies":       "BFSI",
     "chartered-accountants":     "BFSI",
+    "ca-firms":                  "BFSI",
     "logistics-companies":       "Logistics / Transport",
     "hotels":                    "Hospitality",
     "automobile-dealers":        "Automobile",
@@ -37,10 +39,8 @@ INDUSTRY_MAP = {
     "fmcg-companies":            "FMCG / Retail / Food",
     "retail-companies":          "FMCG / Retail / Food",
     "food-companies":            "FMCG / Retail / Food",
-    "ca-firms":                  "BFSI",
 }
 
-# Sulekha uses different city slugs
 CITY_SLUG_MAP = {
     "Chennai":     "chennai",
     "Coimbatore":  "coimbatore",
@@ -59,8 +59,13 @@ CITY_SLUG_MAP = {
 
 def scrape_sulekha(category: str, city: str, max_pages: int = 10) -> list[dict]:
     """Scrape ALL Sulekha pages for category in city."""
-    leads    = []
-    industry = INDUSTRY_MAP.get(category, "Other")
+    # Skip if category was accidentally passed for a removed industry
+    if category in ("pharmaceutical-companies", "hospitals"):
+        log.info(f"  Sulekha: skipping blocked category [{category}]")
+        return []
+
+    leads     = []
+    industry  = INDUSTRY_MAP.get(category, "Other")
     city_slug = CITY_SLUG_MAP.get(city, city.lower())
 
     for page in range(1, max_pages + 1):
