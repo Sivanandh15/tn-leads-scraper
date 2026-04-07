@@ -1,9 +1,7 @@
 """
-LinkedIn lead finder via Google Search.
+LinkedIn lead finder via Google Search — IT focused across Tamil Nadu.
 Searches Google for: site:linkedin.com/in "HR Manager" "IT company" Chennai
 No LinkedIn account or login used — hits Google public search only.
-
-Phone extraction: scans Google snippet text for Indian mobile numbers.
 """
 import requests, time, logging, re
 from bs4 import BeautifulSoup
@@ -22,42 +20,45 @@ HEADERS = {
     "DNT":             "1",
 }
 
-TN_CITIES = ["Chennai","Coimbatore","Madurai","Trichy","Salem","Tiruppur",
-             "Vellore","Erode","Tirunelveli","Thoothukudi","Dindigul","Thanjavur"]
-
-# HR / decision-maker roles to search for — focused on IT & business
-HR_SEARCH_QUERIES = [
-    # IT / Tech
-    'site:linkedin.com/in "HR Manager" "IT company" Chennai',
-    'site:linkedin.com/in "HR Head" "software company" Chennai',
-    'site:linkedin.com/in "Human Resources" "tech company" Chennai',
-    'site:linkedin.com/in "HR Manager" "software" Coimbatore',
-    'site:linkedin.com/in "Talent Acquisition" "IT" Chennai',
-
-    # Manufacturing / Logistics
-    'site:linkedin.com/in "HR Manager" "manufacturing" Chennai',
-    'site:linkedin.com/in "Admin Manager" "manufacturing" Coimbatore',
-    'site:linkedin.com/in "HR Manager" "logistics" Chennai',
-    'site:linkedin.com/in "Procurement Manager" "manufacturing" Chennai',
-
-    # Construction / Real Estate
-    'site:linkedin.com/in "HR Manager" "construction" Chennai',
-    'site:linkedin.com/in "Admin" "real estate" Chennai',
-
-    # BFSI
-    'site:linkedin.com/in "HR Manager" "bank" Chennai',
-    'site:linkedin.com/in "HR" "insurance" Chennai',
-
-    # Events / Media / Automobile
-    'site:linkedin.com/in "HR Manager" "automobile" Chennai',
-    'site:linkedin.com/in "Admin Manager" "event management" Chennai',
+TN_CITIES = [
+    "Chennai", "Coimbatore", "Madurai", "Trichy", "Salem",
+    "Tiruppur", "Vellore", "Erode", "Tirunelveli", "Thoothukudi",
+    "Dindigul", "Thanjavur"
 ]
 
-# Also search directly for company phone numbers on Google
-COMPANY_PHONE_QUERIES = [
-    'IT companies Chennai contact number site:justdial.com OR site:sulekha.com',
-    'software companies Chennai phone number',
-    'manufacturing companies Coimbatore contact number',
+# IT-focused LinkedIn HR queries across all TN cities
+HR_SEARCH_QUERIES = [
+    # Chennai IT
+    'site:linkedin.com/in "HR Manager" "software company" Chennai',
+    'site:linkedin.com/in "HR Head" "IT company" Chennai',
+    'site:linkedin.com/in "Talent Acquisition" "tech" Chennai',
+    'site:linkedin.com/in "HR Manager" "software" Chennai',
+    'site:linkedin.com/in "Human Resources" "IT" Chennai',
+    'site:linkedin.com/in "HR" "startup" Chennai',
+    'site:linkedin.com/in "People Operations" "tech" Chennai',
+
+    # Coimbatore IT
+    'site:linkedin.com/in "HR Manager" "software" Coimbatore',
+    'site:linkedin.com/in "HR" "IT company" Coimbatore',
+    'site:linkedin.com/in "Talent Acquisition" "tech" Coimbatore',
+
+    # Other TN cities
+    'site:linkedin.com/in "HR Manager" "software" Madurai',
+    'site:linkedin.com/in "HR Manager" "IT" Trichy',
+    'site:linkedin.com/in "HR" "software company" Salem',
+    'site:linkedin.com/in "HR" "IT" Tiruppur',
+    'site:linkedin.com/in "HR" "software" Vellore',
+
+    # CEO / Founder level (small IT firms)
+    'site:linkedin.com/in "Founder" "software company" Chennai',
+    'site:linkedin.com/in "CEO" "IT company" Coimbatore',
+    'site:linkedin.com/in "Managing Director" "software" Chennai',
+    'site:linkedin.com/in "Founder" "tech startup" Chennai',
+    'site:linkedin.com/in "Director" "IT services" Coimbatore',
+
+    # BD / Admin roles
+    'site:linkedin.com/in "Business Development" "software company" Chennai',
+    'site:linkedin.com/in "Admin Manager" "IT" Chennai',
 ]
 
 
@@ -100,31 +101,27 @@ def scrape_linkedin_via_google(search_phrase: str, max_results: int = 10) -> lis
             continue
         seen.add(key)
 
-        # Try to pull a phone number from the snippet text
         phone = _extract_phone(snippet)
 
         leads.append({
-            "company_name": company,
+            "company_name": company or _extract_company_from_snippet(snippet),
             "contact_name": name,
             "designation":  designation,
             "phone":        phone,
             "email":        "",
             "website":      url,
             "address":      _extract_city(snippet),
-            "industry":     _guess_industry(search_phrase),
+            "industry":     "IT / Tech",
             "source":       "LinkedIn (via Google)",
             "notes":        snippet[:150],
         })
 
-    time.sleep(5)  # be polite
+    time.sleep(5)
     return leads
 
 
 def scrape_all_hr_linkedin(max_per_query: int = 5) -> list[dict]:
-    """
-    Run all HR_SEARCH_QUERIES and return deduplicated leads.
-    Called from main.py for a comprehensive LinkedIn sweep.
-    """
+    """Run all HR_SEARCH_QUERIES and return deduplicated IT leads."""
     all_leads = []
     seen_keys = set()
 
@@ -135,26 +132,20 @@ def scrape_all_hr_linkedin(max_per_query: int = 5) -> list[dict]:
             if key not in seen_keys and key != ("",""):
                 seen_keys.add(key)
                 all_leads.append(lead)
-        log.info(f"  LinkedIn [{query[:60]}...] → {len(leads)} leads")
-        time.sleep(6)   # avoid Google rate limiting
+        log.info(f"  LinkedIn [{query[:60]}] → {len(leads)} leads")
+        time.sleep(6)
 
-    log.info(f"LinkedIn total: {len(all_leads)} unique HR contacts")
+    log.info(f"LinkedIn total: {len(all_leads)} IT contacts")
     return all_leads
 
 
 def _extract_phone(text: str) -> str:
-    """
-    Extract Indian mobile / landline from any text blob.
-    Handles formats: +91-XXXXXXXXXX, 91XXXXXXXXXX, 0XXXXXXXXXX, XXXXXXXXXX
-    """
-    # Patterns to try in priority order
     patterns = [
-        r'(?:\+91[\s\-]?|91[\s\-]?|0)?[6-9]\d{9}',   # mobile
-        r'\b0\d{2,4}[\s\-]?\d{6,8}\b',                  # landline with STD
+        r'(?:\+91[\s\-]?|91[\s\-]?|0)?[6-9]\d{9}',
+        r'\b0\d{2,4}[\s\-]?\d{6,8}\b',
     ]
     for pat in patterns:
-        matches = re.findall(pat, text)
-        for m in matches:
+        for m in re.findall(pat, text):
             digits = re.sub(r'\D', '', m)
             if digits.startswith('91') and len(digits) == 12:
                 digits = digits[2:]
@@ -172,21 +163,14 @@ def _parse_linkedin_title(title: str):
     return name, designation, company
 
 
+def _extract_company_from_snippet(snippet: str) -> str:
+    # Try to pull company name from snippet patterns like "at TechCorp" or "@ TechCorp"
+    match = re.search(r'(?:at|@)\s+([A-Z][A-Za-z0-9\s&]{2,30}(?:Pvt|Ltd|Technologies|Solutions|Systems|Software|Tech|IT)?)', snippet)
+    return match.group(1).strip() if match else ""
+
+
 def _extract_city(snippet: str) -> str:
     for c in TN_CITIES:
         if c.lower() in snippet.lower():
             return c
     return ""
-
-
-def _guess_industry(phrase: str) -> str:
-    p = phrase.lower()
-    if "it" in p or "tech" in p or "software" in p: return "IT / Tech"
-    if "bank" in p or "bfsi" in p or "finance" in p:return "BFSI"
-    if "real estate" in p or "builder" in p:        return "Real Estate / Construction"
-    if "manufactur" in p or "textile" in p:         return "Manufacturing / Textile"
-    if "logistics" in p:                            return "Logistics / Transport"
-    if "hotel" in p:                                return "Hospitality"
-    if "automobile" in p:                           return "Automobile"
-    if "event" in p:                                return "Media / Events"
-    return "Other"
