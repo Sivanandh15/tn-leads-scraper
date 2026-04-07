@@ -1,8 +1,7 @@
 """
-Naukri.com job post scraper.
-Updated: takes city+role as parameters (called per city from main.py).
-Paginated — gets all results per search.
-Companies actively hiring HR/Admin/Procurement = have gifting budget.
+Naukri.com job post scraper — IT focused.
+Companies actively hiring = have budget = good gifting leads.
+Searches for IT-specific roles across all TN cities.
 """
 import requests, time, logging
 from bs4 import BeautifulSoup
@@ -34,13 +33,27 @@ CITY_SLUG_MAP = {
     "Thanjavur":   "thanjavur",
 }
 
+# IT roles — companies hiring these have active teams and gifting budgets
+IT_ROLES = [
+    "software-engineer",
+    "python-developer",
+    "java-developer",
+    "fullstack-developer",
+    "hr-manager",
+    "it-manager",
+    "project-manager",
+    "business-development-executive",
+    "react-developer",
+    "data-analyst",
+]
 
-def scrape_naukri(role: str = "hr manager", city: str = "chennai", max_pages: int = 3) -> list[dict]:
-    """Scrape Naukri for companies hiring `role` in `city`."""
+
+def scrape_naukri(role: str = "software-engineer", city: str = "Chennai", max_pages: int = 3) -> list[dict]:
+    """Scrape Naukri for IT companies hiring `role` in `city`."""
     leads     = []
     seen      = set()
     city_slug = CITY_SLUG_MAP.get(city, city.lower())
-    role_slug = role.replace(" ", "-")
+    role_slug = role.lower().replace(" ", "-")
 
     for page in range(1, max_pages + 1):
         if page == 1:
@@ -61,21 +74,29 @@ def scrape_naukri(role: str = "hr manager", city: str = "chennai", max_pages: in
         job_cards = (soup.select("article.jobTuple")          or
                      soup.select("div.jobTuple")              or
                      soup.select("div.srp-jobtuple-wrapper")  or
-                     soup.select("div.job-container"))
+                     soup.select("div.job-container")         or
+                     soup.select("div[class*='job-tuple']"))
 
         if not job_cards:
             log.info(f"  Naukri [{role} in {city}]: no cards on page {page}")
             break
 
         for card in job_cards:
-            company = _text(card, ["a.subTitle","div.comp-name","span.companyName","a.comp-name"])
-            if not company or company in seen:
+            company = _text(card, [
+                "a.subTitle", "div.comp-name", "span.companyName",
+                "a.comp-name", "span[class*='comp-name']"
+            ])
+            if not company or company.lower() in seen:
                 continue
-            seen.add(company)
+            seen.add(company.lower())
 
-            job_title = _text(card, ["a.title","div.job-title","a.jd-header-title"])
-            location  = _text(card, ["span.location","li.location","span.locWdth","span.ni-job-tuple-icon-srp-location"])
-            job_link  = _attr(card, ["a.title","a.job-title","a.jd-header-title"], "href") or ""
+            job_title = _text(card, ["a.title", "div.job-title", "a.jd-header-title"])
+            location  = _text(card, [
+                "span.location", "li.location", "span.locWdth",
+                "span[class*='location']", "li[class*='location']"
+            ])
+            job_link  = _attr(card, ["a.title", "a.job-title", "a.jd-header-title"], "href") or ""
+            exp       = _text(card, ["span.experience", "li.experience", "span[class*='exp']"])
 
             leads.append({
                 "company_name": company.strip(),
@@ -85,9 +106,9 @@ def scrape_naukri(role: str = "hr manager", city: str = "chennai", max_pages: in
                 "email":        "",
                 "website":      "",
                 "address":      (location or city).strip(),
-                "industry":     "Mixed — actively hiring",
+                "industry":     "IT / Tech",
                 "source":       "Naukri (hiring signal)",
-                "notes":        f"Hiring: {job_title} | {job_link[:80]}",
+                "notes":        f"Hiring: {job_title} ({exp}) | {job_link[:80]}",
             })
 
         log.info(f"  Naukri [{role} in {city}] page {page}: +{len(job_cards)} cards")
@@ -96,13 +117,34 @@ def scrape_naukri(role: str = "hr manager", city: str = "chennai", max_pages: in
     return leads
 
 
+def scrape_naukri_all_it(cities: list, max_pages: int = 2) -> list[dict]:
+    """Scrape IT roles across multiple cities."""
+    all_leads = []
+    seen_companies = set()
+
+    for city in cities:
+        for role in IT_ROLES[:5]:  # top 5 roles to avoid overloading
+            leads = scrape_naukri(role, city, max_pages)
+            for lead in leads:
+                key = lead.get("company_name", "").lower().strip()
+                if key and key not in seen_companies:
+                    seen_companies.add(key)
+                    all_leads.append(lead)
+            time.sleep(2)
+
+    log.info(f"Naukri total: {len(all_leads)} IT companies actively hiring")
+    return all_leads
+
+
 def _designate_from_role(role: str) -> str:
     r = role.lower()
-    if "hr" in r:          return "HR Manager"
-    if "admin" in r:       return "Admin Manager"
-    if "procurement" in r: return "Procurement Manager"
-    if "office" in r:      return "Office Manager"
-    return role.title()
+    if "hr" in r:               return "HR Manager"
+    if "manager" in r:          return "Manager"
+    if "developer" in r:        return "Tech Team"
+    if "engineer" in r:         return "Engineering Team"
+    if "business" in r:         return "BD Manager"
+    if "analyst" in r:          return "Analytics Team"
+    return role.replace("-", " ").title()
 
 
 def _text(card, selectors):
