@@ -1,7 +1,7 @@
 """
-JustDial scraper — best source for Indian SME / small IT companies.
-Scrapes https://www.justdial.com/{city}/IT-Companies
-Full pagination until empty.
+JustDial scraper — multi-niche version.
+Exposes scrape_justdial_niche(city, categories, max_pages) used by main.py.
+Keeps backward-compatible scrape_justdial_it() alias.
 """
 import requests, time, re, logging
 from bs4 import BeautifulSoup
@@ -18,7 +18,6 @@ HEADERS = {
     "Referer":         "https://www.justdial.com/",
 }
 
-# JustDial city slugs
 CITY_SLUG_MAP = {
     "Chennai":     "Chennai",
     "Coimbatore":  "Coimbatore",
@@ -34,44 +33,48 @@ CITY_SLUG_MAP = {
     "Thanjavur":   "Thanjavur",
 }
 
-# IT-focused search categories on JustDial
+# Legacy IT categories (kept for backward compat)
 IT_CATEGORIES = [
-    ("IT-Companies",              "IT / Tech"),
-    ("Software-Companies",        "IT / Tech"),
-    ("Software-Development-Companies", "IT / Tech"),
-    ("Web-Design-Companies",      "IT / Tech"),
-    ("Mobile-App-Development",    "IT / Tech"),
+    ("IT-Companies",               "IT / Tech"),
+    ("Software-Companies",         "IT / Tech"),
+    ("Software-Development-Companies","IT / Tech"),
+    ("Web-Design-Companies",       "IT / Tech"),
+    ("Mobile-App-Development",     "IT / Tech"),
     ("Digital-Marketing-Companies","IT / Tech"),
-    ("IT-Services",               "IT / Tech"),
-    ("Computer-Training-Institutes","IT / Tech"),
-    ("BPO-Companies",             "IT / Tech"),
-    ("Data-Analytics-Companies",  "IT / Tech"),
+    ("BPO-Companies",              "IT / Tech"),
 ]
 
 
-def scrape_justdial_it(city: str, max_pages: int = 5) -> list[dict]:
-    """Scrape JustDial IT company listings for a given city."""
+def scrape_justdial_niche(city: str, categories: list[tuple], max_pages: int = 5) -> list[dict]:
+    """
+    Generic JustDial scraper for any niche.
+    categories: list of (url_slug, industry_label) tuples.
+    Returns ALL leads found (phone filtering done in main.py).
+    """
     all_leads = []
     city_slug = CITY_SLUG_MAP.get(city, city)
-
-    for category, industry in IT_CATEGORIES:
+    for category, industry in categories:
         leads = _scrape_category(city_slug, city, category, industry, max_pages)
         all_leads.extend(leads)
         log.info(f"  JustDial [{category}/{city}]: {len(leads)} leads")
         time.sleep(3)
-
     return all_leads
 
 
-def _scrape_category(city_slug: str, city: str, category: str, industry: str, max_pages: int) -> list[dict]:
+def scrape_justdial_it(city: str, max_pages: int = 5) -> list[dict]:
+    """Backward-compatible alias — IT niche only."""
+    return scrape_justdial_niche(city, IT_CATEGORIES, max_pages)
+
+
+def _scrape_category(city_slug: str, city: str, category: str,
+                     industry: str, max_pages: int) -> list[dict]:
     leads = []
     seen  = set()
 
     for page in range(1, max_pages + 1):
-        if page == 1:
-            url = f"https://www.justdial.com/{city_slug}/{category}"
-        else:
-            url = f"https://www.justdial.com/{city_slug}/{category}/page-{page}"
+        url = (f"https://www.justdial.com/{city_slug}/{category}"
+               if page == 1
+               else f"https://www.justdial.com/{city_slug}/{category}/page-{page}")
 
         try:
             headers = {**HEADERS, "User-Agent": ua.random}
@@ -85,12 +88,10 @@ def _scrape_category(city_slug: str, city: str, category: str, industry: str, ma
             break
 
         soup  = BeautifulSoup(resp.text, "lxml")
-
-        # JustDial uses multiple layouts — try all selectors
-        cards = (soup.select("li.cntanr")           or
-                 soup.select("div.resultbox_info")   or
-                 soup.select("div.jdcard")           or
-                 soup.select("section.jdcard-sec")   or
+        cards = (soup.select("li.cntanr")            or
+                 soup.select("div.resultbox_info")    or
+                 soup.select("div.jdcard")            or
+                 soup.select("section.jdcard-sec")    or
                  soup.select("li[class*='resultbox']"))
 
         if not cards:
@@ -98,7 +99,7 @@ def _scrape_category(city_slug: str, city: str, category: str, industry: str, ma
             break
 
         for card in cards:
-            name  = _text(card, [
+            name = _text(card, [
                 "span.lng_lst_wrap", "h2.comp-name", "a.comp-name",
                 "span.jdcard-title", "p.shop-title", "h2", "h3"
             ])
@@ -111,8 +112,8 @@ def _scrape_category(city_slug: str, city: str, category: str, industry: str, ma
                 "span.cont_fl_addr", "p.address", "span.address",
                 "div.jdcard-address", "p.jdcard-address"
             ])
-            website = _attr(card, ["a.weblink","a[href*='http']"], "href")
-            rating  = _text(card, ["span.jdcard-stars","span.rating","span[class*='star']"])
+            website = _attr(card, ["a.weblink", "a[href*='http']"], "href")
+            rating  = _text(card, ["span.jdcard-stars", "span.rating", "span[class*='star']"])
 
             leads.append({
                 "company_name": name.strip(),
@@ -134,13 +135,10 @@ def _scrape_category(city_slug: str, city: str, category: str, industry: str, ma
 
 
 def _extract_phone_from_card(card) -> str:
-    """Try multiple selectors and also scan raw text for phone numbers."""
-    # Try direct selectors first
     for sel in ["span.contact-info", "p.phone", "span.mobilesv",
                 "a[href^='tel:']", "span[class*='phone']"]:
         el = card.select_one(sel)
         if el:
-            # href="tel:XXXXXXXXXX"
             href = el.get("href", "")
             if href.startswith("tel:"):
                 digits = re.sub(r"\D", "", href)
@@ -148,12 +146,9 @@ def _extract_phone_from_card(card) -> str:
                     digits = digits[2:]
                 if len(digits) == 10 and digits[0] in "6789":
                     return digits
-            text = el.get_text(strip=True)
-            phone = _clean_phone(text)
+            phone = _clean_phone(el.get_text(strip=True))
             if phone:
                 return phone
-
-    # Scan raw text of card
     return _clean_phone(card.get_text(" "))
 
 
