@@ -1,6 +1,7 @@
 """
-Sulekha.com business listing scraper — IT focused.
-Full pagination. Robust selectors for current Sulekha layout.
+Sulekha.com business listing scraper — multi-niche version.
+Supports all niches: IT, Pharma, Real Estate, Manufacturing, BFSI, Logistics,
+Automobile, Media/Events, FMCG, Healthcare.
 """
 import requests, time, re, logging
 from bs4 import BeautifulSoup
@@ -17,8 +18,8 @@ HEADERS = {
     "DNT":             "1",
 }
 
-# IT-first industry map
 INDUSTRY_MAP = {
+    # IT
     "it-companies":                   "IT / Tech",
     "software-companies":             "IT / Tech",
     "software-development-companies": "IT / Tech",
@@ -27,25 +28,42 @@ INDUSTRY_MAP = {
     "digital-marketing-agencies":     "IT / Tech",
     "bpo-companies":                  "IT / Tech",
     "it-services":                    "IT / Tech",
-    "computer-training-institutes":   "IT / Tech",
     "erp-software-companies":         "IT / Tech",
     "cloud-computing-companies":      "IT / Tech",
     "cybersecurity-companies":        "IT / Tech",
     "data-analytics-companies":       "IT / Tech",
-    # Secondary industries
-    "manufacturing-companies":        "Manufacturing / Textile",
-    "textile-companies":              "Manufacturing / Textile",
+    # Pharma / Healthcare
+    "pharmaceutical-companies":       "Pharma / Healthcare",
+    "medical-equipment-dealers":      "Pharma / Healthcare",
+    "hospitals":                      "Pharma / Healthcare",
+    "diagnostic-centres":             "Pharma / Healthcare",
+    "ayurvedic-medicine-manufacturers":"Pharma / Healthcare",
+    "healthcare-companies":           "Pharma / Healthcare",
+    "drug-stores":                    "Pharma / Healthcare",
+    # Real Estate / Construction
     "real-estate-agents":             "Real Estate / Construction",
     "construction-companies":         "Real Estate / Construction",
+    "builders-and-developers":        "Real Estate / Construction",
+    "interior-designers":             "Real Estate / Construction",
+    # Manufacturing / Textile
+    "manufacturing-companies":        "Manufacturing / Textile",
+    "textile-companies":              "Manufacturing / Textile",
+    "garment-manufacturers":          "Manufacturing / Textile",
+    # BFSI
     "banks":                          "BFSI",
     "insurance-companies":            "BFSI",
     "ca-firms":                       "BFSI",
+    "financial-advisors":             "BFSI",
+    # Logistics
     "logistics-companies":            "Logistics / Transport",
-    "hotels":                         "Hospitality",
+    # Automobile
     "automobile-dealers":             "Automobile",
+    # Media / Events
     "advertising-agencies":           "Media / Events",
     "event-management-companies":     "Media / Events",
+    # FMCG / Food
     "fmcg-companies":                 "FMCG / Retail / Food",
+    "food-processing-companies":      "FMCG / Retail / Food",
 }
 
 CITY_SLUG_MAP = {
@@ -63,7 +81,7 @@ CITY_SLUG_MAP = {
     "Thanjavur":   "thanjavur",
 }
 
-# URL patterns to try for Sulekha (they change their URL structure)
+
 def _build_urls(category: str, city_slug: str, page: int) -> list[str]:
     if page == 1:
         return [
@@ -78,7 +96,6 @@ def _build_urls(category: str, city_slug: str, page: int) -> list[str]:
 
 
 def scrape_sulekha(category: str, city: str, max_pages: int = 5) -> list[dict]:
-    """Scrape Sulekha listings for category in city."""
     leads     = []
     industry  = INDUSTRY_MAP.get(category, "Other")
     city_slug = CITY_SLUG_MAP.get(city, city.lower())
@@ -103,14 +120,12 @@ def scrape_sulekha(category: str, city: str, max_pages: int = 5) -> list[dict]:
                 continue
 
             soup  = BeautifulSoup(resp.text, "lxml")
-
-            # Try all known card selectors — Sulekha changes layout often
-            cards = (soup.select("div.companylist-cont")   or
-                     soup.select("li.listing-item")         or
-                     soup.select("div.biz-listing")         or
-                     soup.select("div.company-info")        or
-                     soup.select("div.sl-item")             or
-                     soup.select("li[class*='listing']")    or
+            cards = (soup.select("div.companylist-cont")  or
+                     soup.select("li.listing-item")        or
+                     soup.select("div.biz-listing")        or
+                     soup.select("div.company-info")       or
+                     soup.select("div.sl-item")            or
+                     soup.select("li[class*='listing']")   or
                      soup.select("div[class*='company']"))
 
             if not cards:
@@ -146,7 +161,7 @@ def scrape_sulekha(category: str, city: str, max_pages: int = 5) -> list[dict]:
 
             log.info(f"  Sulekha {category}/{city} page {page}: +{len(cards)} entries at {url}")
             time.sleep(2.5)
-            break  # URL worked, don't try next URL pattern
+            break
 
         if not success:
             break
@@ -155,7 +170,6 @@ def scrape_sulekha(category: str, city: str, max_pages: int = 5) -> list[dict]:
 
 
 def _extract_phone(card) -> str:
-    # Try direct selectors
     for sel in ["span.phone-no", "span.contact-no", "a.phone",
                 "span.mobileno", "a[href^='tel:']"]:
         el = card.select_one(sel)
@@ -167,11 +181,9 @@ def _extract_phone(card) -> str:
                     digits = digits[2:]
                 if len(digits) == 10:
                     return digits
-            text = el.get_text(strip=True)
-            phone = _clean_phone(text)
+            phone = _clean_phone(el.get_text(strip=True))
             if phone:
                 return phone
-    # Scan full card text
     return _clean_phone(card.get_text(" "))
 
 
