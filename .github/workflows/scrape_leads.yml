@@ -1,20 +1,19 @@
-name: Daily TN Lead Scraper
+name: Daily Multi-Niche TN Lead Scraper
 
 on:
-  # Runs every day at 9:30 AM IST (4:00 AM UTC) — no end date, runs forever
+  # Runs every day at 9:30 AM IST (4:00 AM UTC)
   schedule:
     - cron: '0 4 * * *'
-
   # Manual trigger from Actions tab
   workflow_dispatch:
 
 jobs:
   scrape-and-email:
     runs-on: ubuntu-latest
-    timeout-minutes: 45   # Increased — more scraping now
+    timeout-minutes: 90   # Multi-niche takes longer — 9 niches × 4 cities
 
     permissions:
-      contents: write   # Needed to commit CSVs back to repo
+      contents: write     # Needed to commit CSVs back to repo
 
     steps:
       - name: Checkout repository
@@ -29,7 +28,7 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run lead scraper
+      - name: Run multi-niche lead scraper
         env:
           GMAIL_USER:         ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
@@ -43,5 +42,5 @@ jobs:
           git add leads/
           git diff --quiet && git diff --staged --quiet \
             && echo "No new leads to commit." \
-            || git commit -m "leads: $(date +%Y-%m-%d)"
+            || git commit -m "leads: $(date +%Y-%m-%d) — multi-niche"
           git push
