@@ -160,7 +160,7 @@ def scrape_sulekha(category: str, city: str, max_pages: int = 5) -> list[dict]:
                 })
 
             log.info(f"  Sulekha {category}/{city} page {page}: +{len(cards)} entries at {url}")
-            time.sleep(2.5)
+            time.sleep(1)
             break
 
         if not success:
