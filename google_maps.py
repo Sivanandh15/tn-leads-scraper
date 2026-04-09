@@ -88,7 +88,7 @@ def scrape_google_maps(query: str, city: str, api_key: str = "", max_results: in
                 lead = _element_to_lead(element, query, city)
                 if lead:
                     leads.append(lead)
-            time.sleep(1.5)
+            time.sleep(0.75)
         except Exception as e:
             log.error(f"Overpass error [{tag_key}={tag_val} in {city}]: {e}")
 
