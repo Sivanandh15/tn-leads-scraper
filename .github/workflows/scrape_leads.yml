@@ -10,7 +10,7 @@ on:
 jobs:
   scrape-and-email:
     runs-on: ubuntu-latest
-    timeout-minutes: 90   # Multi-niche takes longer — 9 niches × 4 cities
+    timeout-minutes: 55   # Reduced from 90 — Python hard-stops at 45 min, this is the safety margin
 
     permissions:
       contents: write     # Needed to commit CSVs back to repo
@@ -19,10 +19,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.11
+      - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.12'
           cache: 'pip'
 
       - name: Install dependencies
