@@ -57,7 +57,7 @@ def scrape_justdial_niche(city: str, categories: list[tuple], max_pages: int = 5
         leads = _scrape_category(city_slug, city, category, industry, max_pages)
         all_leads.extend(leads)
         log.info(f"  JustDial [{category}/{city}]: {len(leads)} leads")
-        time.sleep(3)
+        time.sleep(1.5)
     return all_leads
 
 
@@ -129,7 +129,7 @@ def _scrape_category(city_slug: str, city: str, category: str,
             })
 
         log.info(f"  JustDial [{category}/{city_slug}] page {page}: +{len(cards)} entries")
-        time.sleep(2.5)
+        time.sleep(1)
 
     return leads
 
